@@ -23,41 +23,104 @@ def load_data():
 
 # VITAL FEATURES 
 def get_vital_features(pid, cutoff, vitals):
-    window = vitals[(vitals['patient_id'] == pid) & 
-                    (vitals['timestamp'] <= cutoff) & 
-                    (vitals['timestamp'] >= cutoff - pd.Timedelta(hours=LOOKBACK_HOUR))]
+    # Check if vitals is a DataFrame and not empty
+    if not isinstance(vitals, pd.DataFrame) or vitals.empty:
+        return {}
+    
+    # Filter by patient_id
+    patient_vitals = vitals[vitals['patient_id'] == pid]
+    
+    if patient_vitals.empty:
+        return {}
+    
+    # Check if timestamp column exists
+    if 'timestamp' not in patient_vitals.columns:
+        return {}
+    
+    # Filter by timestamp window
+    window = patient_vitals[
+        (patient_vitals['timestamp'] <= cutoff) &
+        (patient_vitals['timestamp'] >= cutoff - pd.Timedelta(hours=LOOKBACK_HOUR))
+    ]
+    
     if window.empty:
-        window = vitals[(vitals['patient_id'] == pid) & (vitals['timestamp'] <= cutoff)].tail(1)
+        window = patient_vitals.tail(1)
     
     feats = {}
     for col in VITAL_COLS:
-        vals = window[col]
-        feats[f'{col}_mean'] = vals.mean()
-        feats[f'{col}_min'] = vals.min()
-        feats[f'{col}_max'] = vals.max()
-        feats[f'{col}_std'] = vals.std() if len(vals) > 1 else 0.0
-        feats[f'{col}_last'] = vals.iloc[-1] if len(vals) > 0 else np.nan
-        
-        if len(window) > 1:
-            hours = (window['timestamp'].iloc[-1] - window['timestamp'].iloc[0]).total_seconds() / 3600
-            feats[f'{col}_rate_per_hr'] = (vals.iloc[-1] - vals.iloc[0]) / hours if hours > 0 else 0.0
+        if col in window.columns:
+            vals = window[col].dropna()
+            if len(vals) > 0:
+                feats[f'{col}_mean'] = vals.mean()
+                feats[f'{col}_min'] = vals.min()
+                feats[f'{col}_max'] = vals.max()
+                feats[f'{col}_std'] = vals.std() if len(vals) > 1 else 0.0
+                feats[f'{col}_last'] = vals.iloc[-1]
+            else:
+                feats[f'{col}_mean'] = np.nan
+                feats[f'{col}_min'] = np.nan
+                feats[f'{col}_max'] = np.nan
+                feats[f'{col}_std'] = 0.0
+                feats[f'{col}_last'] = np.nan
+            
+            # Rate of change
+            if len(window) > 1 and 'timestamp' in window.columns:
+                hours = (window['timestamp'].iloc[-1] - window['timestamp'].iloc[0]).total_seconds() / 3600
+                if hours > 0 and len(vals) > 1:
+                    feats[f'{col}_rate_per_hr'] = (vals.iloc[-1] - vals.iloc[0]) / hours
+                else:
+                    feats[f'{col}_rate_per_hr'] = 0.0
+            else:
+                feats[f'{col}_rate_per_hr'] = 0.0
         else:
+            feats[f'{col}_mean'] = np.nan
+            feats[f'{col}_min'] = np.nan
+            feats[f'{col}_max'] = np.nan
+            feats[f'{col}_std'] = 0.0
+            feats[f'{col}_last'] = np.nan
             feats[f'{col}_rate_per_hr'] = 0.0
+    
     return feats
 
 # LAB FEATURES 
 def get_lab_features(pid, cutoff, labs):
-    window = labs[(labs['patient_id'] == pid) & 
-                  (labs['timestamp'] <= cutoff) & 
-                  (labs['timestamp'] >= cutoff - pd.Timedelta(hours=LAB_LOOKBACK_HOURS))]
+    # Check if labs is a DataFrame and not empty
+    if not isinstance(labs, pd.DataFrame) or labs.empty:
+        return {}
+    
+    # Filter by patient_id
+    patient_labs = labs[labs['patient_id'] == pid]
+    
+    if patient_labs.empty:
+        return {}
+    
+    # Check if timestamp column exists
+    if 'timestamp' not in patient_labs.columns:
+        return {}
+    
+    # Filter by timestamp window
+    window = patient_labs[
+        (patient_labs['timestamp'] <= cutoff) &
+        (patient_labs['timestamp'] >= cutoff - pd.Timedelta(hours=LAB_LOOKBACK_HOURS))
+    ]
+    
     if window.empty:
-        window = labs[(labs['patient_id'] == pid) & (labs['timestamp'] <= cutoff)].tail(1)
+        window = patient_labs.tail(1)
     
     feats = {}
     for col in LAB_COLS:
-        vals = window[col]
-        feats[f'{col}_mean'] = vals.mean()
-        feats[f'{col}_last'] = vals.iloc[-1] if len(vals) > 0 else np.nan
+        if col in window.columns:
+            vals = window[col].dropna()
+            if len(vals) > 0:
+                feats[f'{col}_mean'] = vals.mean()
+                feats[f'{col}_last'] = vals.iloc[-1]
+            else:
+                feats[f'{col}_mean'] = np.nan
+                feats[f'{col}_last'] = np.nan
+        else:
+            feats[f'{col}_mean'] = np.nan
+            feats[f'{col}_last'] = np.nan
+    
     return feats
 
 # STATIC FEATURES
@@ -79,13 +142,17 @@ def build_features():
     outcomes['prediction_time'] = outcomes['diagnosis_time'] - pd.Timedelta(hours=9)
     
     # Vital features
-    vital_rows = [{'patient_id': pid, **get_vital_features(pid, cutoff, vitals)} 
-                  for pid, cutoff in zip(outcomes['patient_id'], outcomes['prediction_time'])]
+    vital_rows = []
+    for pid, cutoff in zip(outcomes['patient_id'], outcomes['prediction_time']):
+        features = get_vital_features(pid, cutoff, vitals)
+        vital_rows.append({'patient_id': pid, **features})
     vital_df = pd.DataFrame(vital_rows)
     
     # Lab features
-    lab_rows = [{'patient_id': pid, **get_lab_features(pid, cutoff, labs)} 
-                for pid, cutoff in zip(outcomes['patient_id'], outcomes['prediction_time'])]
+    lab_rows = []
+    for pid, cutoff in zip(outcomes['patient_id'], outcomes['prediction_time']):
+        features = get_lab_features(pid, cutoff, labs)
+        lab_rows.append({'patient_id': pid, **features})
     lab_df = pd.DataFrame(lab_rows)
     
     # Static features
@@ -93,14 +160,9 @@ def build_features():
     
     # Merge all
     final_df = (static_df
-                .merge(vital_df, on='patient_id')
-                .merge(lab_df, on='patient_id')
-                .merge(outcomes[['patient_id', 'sepsis_event']], on='patient_id'))
-    
-    # Fill missing
-    feature_cols = [c for c in final_df.columns if c not in ('patient_id', 'sepsis_event')]
-    numeric_cols = final_df[feature_cols].select_dtypes(include='number').columns
-    final_df[numeric_cols] = final_df[numeric_cols].fillna(final_df[numeric_cols].median())
+                .merge(vital_df, on='patient_id', how='left')
+                .merge(lab_df, on='patient_id', how='left')
+                .merge(outcomes[['patient_id', 'sepsis_event']], on='patient_id', how='left'))
     
     # Convert target
     final_df['sepsis_event'] = final_df['sepsis_event'].astype(int)
@@ -111,6 +173,5 @@ def build_features():
     
     return final_df
 
-# ===== RUN =====
 if __name__ == "__main__":
     build_features()

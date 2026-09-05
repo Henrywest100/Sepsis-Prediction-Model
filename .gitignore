@@ -1,2 +1,16 @@
 data/
 data/
+
+venv/
+venv_311/
+venv_legacy/
+.env
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+.vscode/
+.idea/
+.DS_Store
