@@ -3,11 +3,8 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
-  - job_name: "prometheus"
-    static_configs:
-      - targets: ["localhost:9090"]
-
   - job_name: "elvara-sepsis-ser"
+    scheme: "http"
     metrics_path: "/metrics"
     static_configs:
-      - targets: ["elvara-api:8002"]  # ← Use container name
+      - targets: ["sepsis-prediction-model.railway.internal:8002"]
